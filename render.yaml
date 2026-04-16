@@ -1,9 +1,11 @@
 services:
   - type: web
     name: loopwalker
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn src.app:app --host 0.0.0.0 --port $PORT
+    env: python
+    plan: free
+    autoDeploy: true
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python -m uvicorn src.app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ORS_API_KEY
         sync: false
