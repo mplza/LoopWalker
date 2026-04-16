@@ -1192,6 +1192,15 @@ async function loadWalkAnalytics() {
   renderWalkAnalytics(data);
 }
 
+function extractDetail(detail, fallback) {
+  if (!detail) return fallback;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+  }
+  return fallback;
+}
+
 async function authAction(action) {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
@@ -1210,7 +1219,7 @@ async function authAction(action) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.detail || `${action} failed (HTTP ${response.status})`);
+    throw new Error(extractDetail(data.detail, `${action} failed (HTTP ${response.status})`));
   }
 
   if (data.user) {
@@ -1241,7 +1250,7 @@ async function resetPasswordAction() {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || 'Password reset failed');
+    throw new Error(extractDetail(data.detail, 'Password reset failed'));
   }
 
   setAuthMessage('Password reset successful. You can now log in.', false);
