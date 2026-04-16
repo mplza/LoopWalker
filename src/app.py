@@ -768,8 +768,15 @@ def route(payload: RouteRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc))
     except requests.HTTPError as exc:
         detail = "OpenRouteService request failed"
-        if exc.response is not None and exc.response.text:
-            detail = exc.response.text[:500]
+        if exc.response is not None:
+            if exc.response.status_code == 429:
+                detail = "Route generation rate limit reached. Please wait a moment and try again."
+            elif exc.response.text:
+                try:
+                    ors_body = exc.response.json()
+                    detail = ors_body.get("error") or ors_body.get("message") or exc.response.text[:500]
+                except Exception:
+                    detail = exc.response.text[:500]
         raise HTTPException(status_code=502, detail=detail)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {exc}")
