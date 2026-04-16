@@ -27,6 +27,7 @@ Includes account flow, route generation, saved history, and favorites.
 - Supports favorites and analytics:
   - mark/unmark saved routes as favorites
   - view favorite routes and replay them on the map
+- See the live app hosted on Render here: https://loopwalker.onrender.com/
 
 ## Setup
 
