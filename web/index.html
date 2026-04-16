@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loop Walker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main>
+      <section id="welcome-view" class="welcome-view">
+        <div class="welcome-card">
+          <h1>Loop Walker</h1>
+          <p class="subtitle prominent-subtitle">Plan a walking loop by minutes, kilometers, or steps.</p>
+          <p class="welcome-copy">Create an account or log in to start generating routes and saving your favorites.</p>
+
+          <form id="auth-form" class="form auth-form" style="width:min(320px,100%);">
+            <div class="row">
+              <label for="auth-email">Username</label>
+              <input id="auth-email" type="text" required style="width:100%;box-sizing:border-box;" />
+            </div>
+            <div class="row">
+              <label for="auth-password">Password</label>
+              <input id="auth-password" type="password" minlength="6" required style="width:100%;box-sizing:border-box;" />
+            </div>
+            <div class="auth-actions two" style="display:flex;flex-direction:column;gap:8px;width:100%;">
+              <button type="button" id="login-btn" style="width:100%;margin-top:0;">Log in</button>
+              <button type="button" id="register-btn" style="width:100%;margin-top:0;">Create account</button>
+            </div>
+          </form>
+
+          <p id="auth-status" class="auth-status" hidden></p>
+        </div>
+      </section>
+
+      <section id="app-view" class="app-view" hidden>
+        <header class="app-header">
+          <div>
+            <h1>Loop Walker</h1>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="Main tabs">
+          <div class="tabs-main">
+            <button type="button" id="tab-generate-btn" class="tab-btn active">Generate</button>
+            <button type="button" id="tab-routes-btn" class="tab-btn">Routes</button>
+            <button type="button" id="tab-sessions-btn" class="tab-btn">Sessions</button>
+            <button type="button" id="tab-analytics-btn" class="tab-btn">Analytics</button>
+          </div>
+          <div class="tabs-user" aria-live="polite">
+            <p id="app-user" class="auth-status">You are logged in.</p>
+            <button type="button" id="logout-btn" class="ghost">Log out</button>
+          </div>
+        </nav>
+
+        <section id="tab-generate" class="tab-panel">
+          <div class="layout">
+            <aside class="panel">
+              <form id="route-form" class="form">
+                <div class="row">
+                  <label for="route_name">Route name (optional)</label>
+                  <input id="route_name" name="route_name" type="text" maxlength="100" placeholder="Morning loop" />
+                </div>
+
+                <div class="row">
+                  <label for="target_mode">Target type</label>
+                  <select id="target_mode" name="target_mode">
+                    <option value="hours">Hours</option>
+                    <option value="minutes">Minutes</option>
+                    <option value="kilometers">Kilometers</option>
+                    <option value="steps">Steps</option>
+                  </select>
+                </div>
+
+                <div class="row">
+                  <label for="target_value">Target value</label>
+                  <input id="target_value" name="target_value" type="number" min="1" step="1" value="30" required />
+                </div>
+
+                <button type="submit">Generate route</button>
+              </form>
+
+              <p class="hint">Click on the map to choose your starting point.</p>
+              <p id="status" class="status">Waiting for map click...</p>
+
+              <section class="metrics" id="metrics" hidden>
+                <h2>Estimated Output</h2>
+                <p><strong>Minutes:</strong> <span id="m-minutes">-</span></p>
+                <p><strong>Kilometers:</strong> <span id="m-km">-</span></p>
+                <p><strong>Steps:</strong> <span id="m-steps">-</span></p>
+              </section>
+
+              <div id="generated-actions" class="generated-actions" hidden>
+                <button type="button" id="save-route-btn">Save route</button>
+                <button type="button" id="new-route-btn" class="ghost">Generate new</button>
+              </div>
+            </aside>
+
+            <section class="map-wrap">
+              <div id="map"></div>
+              <div id="generate-loading" class="generate-loading" hidden aria-live="polite">
+                <span class="spinner-dotted" aria-hidden="true"></span>
+                <span class="generate-loading-label">Generating route...</span>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="tab-routes" class="tab-panel" hidden>
+          <div class="routes-grid">
+            <section class="history" id="history">
+              <h2>Saved Routes</h2>
+              <p id="history-empty" class="hint">No saved routes yet.</p>
+              <ul id="history-list" class="history-list"></ul>
+            </section>
+
+            <section class="history" id="routes-map-panel">
+              <h2>Route Session</h2>
+              <div id="routes-map" class="routes-map"></div>
+
+              <section class="metrics" id="walk-timer" hidden>
+                <h2>Walk Timer</h2>
+                <p><strong>Elapsed:</strong> <span id="timer-elapsed">00:00:00</span></p>
+                <p><strong>Final time:</strong> <span id="timer-final">-</span></p>
+                <div class="timer-actions">
+                  <button type="button" id="timer-start">Start</button>
+                  <button type="button" id="timer-pause" class="ghost" disabled>Pause</button>
+                  <button type="button" id="timer-end" class="ghost" disabled>End</button>
+                </div>
+              </section>
+
+              <section class="metrics" id="route-progress" hidden>
+                <h2>Live Progress</h2>
+                <p><strong>Distance done:</strong> <span id="p-km-done">0.00</span> km</p>
+                <p><strong>Distance left:</strong> <span id="p-km-left">0.00</span> km</p>
+                <p><strong>Minutes done:</strong> <span id="p-min-done">0.0</span> min</p>
+                <p><strong>Minutes left:</strong> <span id="p-min-left">0.0</span> min</p>
+                <p><strong>Completion:</strong> <span id="p-percent">0</span>%</p>
+                <div class="progress-track" aria-label="Route completion progress">
+                  <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <h3 class="same-route-sessions-title">Past Sessions On This Route</h3>
+                <p id="same-route-sessions-empty" class="hint">No past sessions for this route yet.</p>
+                <ul id="same-route-sessions-list" class="history-list same-route-sessions-list"></ul>
+              </section>
+            </section>
+          </div>
+        </section>
+
+        <section id="tab-sessions" class="tab-panel" hidden>
+          <div class="routes-grid">
+            <section class="history" id="sessions-history">
+              <h2>Completed Sessions</h2>
+              <p id="sessions-empty" class="hint">No completed sessions yet.</p>
+              <ul id="sessions-list" class="history-list"></ul>
+            </section>
+
+            <section class="history" id="sessions-map-panel">
+              <h2>Session Details</h2>
+              <div id="sessions-map" class="routes-map"></div>
+              <section class="metrics" id="session-stats" hidden>
+                <p><strong>Total time:</strong> <span id="ss-time">00:00:00</span></p>
+                <p><strong>Kilometers:</strong> <span id="ss-km">0.00</span> km</p>
+                <p><strong>Steps:</strong> <span id="ss-steps">0</span></p>
+                <p><strong>Started:</strong> <span id="ss-started">-</span></p>
+                <p><strong>Ended:</strong> <span id="ss-ended">-</span></p>
+              </section>
+            </section>
+          </div>
+        </section>
+
+        <section id="tab-analytics" class="tab-panel" hidden>
+          <section class="history">
+            <div class="summary-toggle" role="tablist" aria-label="Summary period selector">
+              <button type="button" id="summary-daily-btn" class="summary-toggle-btn active">Daily</button>
+              <button type="button" id="summary-weekly-btn" class="summary-toggle-btn">Weekly</button>
+              <button type="button" id="summary-monthly-btn" class="summary-toggle-btn">Monthly</button>
+            </div>
+
+            <div class="analytics-focus-row">
+              <div id="analytics-overview" class="analytics-overview"></div>
+              <article class="analytics-card analytics-selected-chart-card">
+                <div class="analytics-selected-chart-head">
+                  <h3 id="analytics-selected-chart-title">Days With Sessions</h3>
+                  <div class="analytics-chart-metric-inline">
+                    <label for="analytics-metric-select" class="metric-inline-label">Metric</label>
+                    <select id="analytics-metric-select" aria-label="Analytics chart metric">
+                      <option value="elapsed_hours">Hours</option>
+                      <option value="elapsed_minutes">Minutes</option>
+                      <option value="distance_km">Kilometers</option>
+                      <option value="steps">Steps</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="analytics-selected-chart" class="mini-chart" aria-label="Selected period sessions chart"></div>
+              </article>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
