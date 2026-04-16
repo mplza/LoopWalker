@@ -1210,7 +1210,7 @@ async function authAction(action) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.detail || `${action} failed`);
+    throw new Error(data.detail || `${action} failed (HTTP ${response.status})`);
   }
 
   if (data.user) {

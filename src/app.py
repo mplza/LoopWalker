@@ -398,7 +398,7 @@ def register(payload: AuthRequest, response: Response) -> dict:
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=True,
         max_age=60 * 60 * 24 * 30,
     )
     return {"user": user}
@@ -420,7 +420,7 @@ def login(payload: AuthRequest, response: Response) -> dict:
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=True,
         max_age=60 * 60 * 24 * 30,
     )
     return {
