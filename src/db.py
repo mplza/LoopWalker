@@ -1,149 +1,145 @@
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
-from typing import Any
+import os
+from contextlib import contextmanager
+from typing import Any, Generator
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
-
-
-def _get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+import psycopg2
+import psycopg2.extras
 
 
-def _route_sessions_has_kcal_column(conn: sqlite3.Connection) -> bool:
-    rows = conn.execute("PRAGMA table_info(route_sessions)").fetchall()
-    return any(str(row["name"]) == "kcal" for row in rows)
+@contextmanager
+def _get_conn() -> Generator[psycopg2.extensions.connection, None, None]:
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
-def _route_sessions_has_route_name_column(conn: sqlite3.Connection) -> bool:
-    rows = conn.execute("PRAGMA table_info(route_sessions)").fetchall()
-    return any(str(row["name"]) == "route_name" for row in rows)
-
-
-def _walk_sessions_has_route_geojson_column(conn: sqlite3.Connection) -> bool:
-    rows = conn.execute("PRAGMA table_info(walk_sessions)").fetchall()
-    return any(str(row["name"]) == "route_geojson" for row in rows)
+def _cursor(conn: psycopg2.extensions.connection) -> psycopg2.extensions.cursor:
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def init_db() -> None:
     with _get_conn() as conn:
-        conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 password_salt TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
             """
         )
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
+            )
             """
         )
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS route_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 profile TEXT NOT NULL,
                 route_name TEXT,
                 target_mode TEXT NOT NULL,
-                target_value REAL NOT NULL,
-                start_lat REAL NOT NULL,
-                start_lon REAL NOT NULL,
-                distance_km REAL NOT NULL,
-                duration_min REAL NOT NULL,
+                target_value DOUBLE PRECISION NOT NULL,
+                start_lat DOUBLE PRECISION NOT NULL,
+                start_lon DOUBLE PRECISION NOT NULL,
+                distance_km DOUBLE PRECISION NOT NULL,
+                duration_min DOUBLE PRECISION NOT NULL,
                 steps INTEGER NOT NULL,
                 route_geojson TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
+            )
             """
         )
-        if not _route_sessions_has_route_name_column(conn):
-            conn.execute("ALTER TABLE route_sessions ADD COLUMN route_name TEXT")
-
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS walk_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 route_session_id INTEGER,
                 route_geojson TEXT,
-                started_at TEXT NOT NULL,
-                ended_at TEXT NOT NULL,
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP NOT NULL,
                 elapsed_seconds INTEGER NOT NULL,
-                distance_km REAL NOT NULL,
+                distance_km DOUBLE PRECISION NOT NULL,
                 steps INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (route_session_id) REFERENCES route_sessions(id) ON DELETE SET NULL
-            );
+            )
             """
         )
-        if not _walk_sessions_has_route_geojson_column(conn):
-            conn.execute("ALTER TABLE walk_sessions ADD COLUMN route_geojson TEXT")
-        conn.execute(
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS favorite_routes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 route_session_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, route_session_id),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (route_session_id) REFERENCES route_sessions(id) ON DELETE CASCADE
-            );
+            )
             """
         )
 
 
 def create_user(email: str, password_hash: str, password_salt: str) -> dict[str, Any]:
     with _get_conn() as conn:
-        cur = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO users (email, password_hash, password_salt)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
+            RETURNING id, email, created_at
             """,
             (email.lower().strip(), password_hash, password_salt),
         )
-        user_id = cur.lastrowid
-        row = conn.execute("SELECT id, email, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = cur.fetchone()
     return dict(row)
 
 
 def get_user_by_email(email: str) -> dict[str, Any] | None:
     with _get_conn() as conn:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT id, email, password_hash, password_salt, created_at
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email.lower().strip(),),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
 def update_user_password(email: str, password_hash: str, password_salt: str) -> bool:
     with _get_conn() as conn:
-        cur = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             UPDATE users
-            SET password_hash = ?, password_salt = ?
-            WHERE email = ?
+            SET password_hash = %s, password_salt = %s
+            WHERE email = %s
             """,
             (password_hash, password_salt, email.lower().strip()),
         )
@@ -152,37 +148,43 @@ def update_user_password(email: str, password_hash: str, password_salt: str) -> 
 
 def get_user_by_id(user_id: int) -> dict[str, Any] | None:
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT id, email, created_at FROM users WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT id, email, created_at FROM users WHERE id = %s",
             (user_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
 def create_session(token: str, user_id: int) -> None:
     with _get_conn() as conn:
-        conn.execute(
-            "INSERT INTO auth_sessions (token, user_id) VALUES (?, ?)",
+        cur = _cursor(conn)
+        cur.execute(
+            "INSERT INTO auth_sessions (token, user_id) VALUES (%s, %s)",
             (token, user_id),
         )
 
 
 def delete_session(token: str) -> None:
     with _get_conn() as conn:
-        conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+        cur = _cursor(conn)
+        cur.execute("DELETE FROM auth_sessions WHERE token = %s", (token,))
 
 
 def get_user_by_session(token: str) -> dict[str, Any] | None:
     with _get_conn() as conn:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT u.id, u.email, u.created_at
             FROM auth_sessions s
             JOIN users u ON u.id = s.user_id
-            WHERE s.token = ?
+            WHERE s.token = %s
             """,
             (token,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
@@ -201,76 +203,25 @@ def create_route_session(
     route_geojson: str,
 ) -> int:
     with _get_conn() as conn:
-        if _route_sessions_has_kcal_column(conn):
-            cur = conn.execute(
-                """
-                INSERT INTO route_sessions (
-                    user_id,
-                    profile,
-                    route_name,
-                    target_mode,
-                    target_value,
-                    start_lat,
-                    start_lon,
-                    distance_km,
-                    duration_min,
-                    steps,
-                    kcal,
-                    route_geojson
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    profile,
-                    route_name,
-                    target_mode,
-                    target_value,
-                    start_lat,
-                    start_lon,
-                    distance_km,
-                    duration_min,
-                    steps,
-                    0.0,
-                    route_geojson,
-                ),
+        cur = _cursor(conn)
+        cur.execute(
+            """
+            INSERT INTO route_sessions (
+                user_id, profile, route_name, target_mode, target_value,
+                start_lat, start_lon, distance_km, duration_min, steps, route_geojson
             )
-        else:
-            cur = conn.execute(
-                """
-                INSERT INTO route_sessions (
-                    user_id,
-                    profile,
-                    route_name,
-                    target_mode,
-                    target_value,
-                    start_lat,
-                    start_lon,
-                    distance_km,
-                    duration_min,
-                    steps,
-                    route_geojson
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    profile,
-                    route_name,
-                    target_mode,
-                    target_value,
-                    start_lat,
-                    start_lon,
-                    distance_km,
-                    duration_min,
-                    steps,
-                    route_geojson,
-                ),
-            )
-        route_id = int(cur.lastrowid)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                user_id, profile, route_name, target_mode, target_value,
+                start_lat, start_lon, distance_km, duration_min, steps, route_geojson,
+            ),
+        )
+        route_id = int(cur.fetchone()["id"])
         if not route_name or not route_name.strip():
-            conn.execute(
-                "UPDATE route_sessions SET route_name = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE route_sessions SET route_name = %s WHERE id = %s",
                 (f"Route {route_id}", route_id),
             )
         return route_id
@@ -278,7 +229,8 @@ def create_route_session(
 
 def list_route_sessions(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     with _get_conn() as conn:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 rs.id,
@@ -298,21 +250,24 @@ def list_route_sessions(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
             LEFT JOIN favorite_routes fr
               ON fr.route_session_id = rs.id
              AND fr.user_id = rs.user_id
-            WHERE rs.user_id = ?
-                        ORDER BY datetime(rs.created_at) DESC, rs.id DESC
-            LIMIT ?
+            WHERE rs.user_id = %s
+            ORDER BY rs.created_at DESC, rs.id DESC
+            LIMIT %s
             """,
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
 def add_favorite_route(user_id: int, route_session_id: int) -> None:
     with _get_conn() as conn:
-        conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
-            INSERT OR IGNORE INTO favorite_routes (user_id, route_session_id)
-            VALUES (?, ?)
+            INSERT INTO favorite_routes (user_id, route_session_id)
+            VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
             """,
             (user_id, route_session_id),
         )
@@ -320,15 +275,17 @@ def add_favorite_route(user_id: int, route_session_id: int) -> None:
 
 def remove_favorite_route(user_id: int, route_session_id: int) -> None:
     with _get_conn() as conn:
-        conn.execute(
-            "DELETE FROM favorite_routes WHERE user_id = ? AND route_session_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "DELETE FROM favorite_routes WHERE user_id = %s AND route_session_id = %s",
             (user_id, route_session_id),
         )
 
 
 def list_favorite_routes(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     with _get_conn() as conn:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 rs.id,
@@ -346,21 +303,24 @@ def list_favorite_routes(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
                 1 AS is_favorite
             FROM favorite_routes fr
             JOIN route_sessions rs ON rs.id = fr.route_session_id
-            WHERE fr.user_id = ?
-            ORDER BY datetime(fr.created_at) DESC, fr.id DESC
-            LIMIT ?
+            WHERE fr.user_id = %s
+            ORDER BY fr.created_at DESC, fr.id DESC
+            LIMIT %s
             """,
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
 def get_route_owner(route_session_id: int) -> int | None:
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT user_id FROM route_sessions WHERE id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT user_id FROM route_sessions WHERE id = %s",
             (route_session_id,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     if not row:
         return None
     return int(row["user_id"])
@@ -368,10 +328,12 @@ def get_route_owner(route_session_id: int) -> int | None:
 
 def get_route_geojson(user_id: int, route_session_id: int) -> str | None:
     with _get_conn() as conn:
-        row = conn.execute(
-            "SELECT route_geojson FROM route_sessions WHERE id = ? AND user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "SELECT route_geojson FROM route_sessions WHERE id = %s AND user_id = %s",
             (route_session_id, user_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     if not row:
         return None
     return str(row["route_geojson"]) if row["route_geojson"] is not None else None
@@ -379,11 +341,12 @@ def get_route_geojson(user_id: int, route_session_id: int) -> str | None:
 
 def update_route_name(user_id: int, route_session_id: int, route_name: str | None) -> bool:
     with _get_conn() as conn:
-        cur = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             UPDATE route_sessions
-            SET route_name = ?
-            WHERE id = ? AND user_id = ?
+            SET route_name = %s
+            WHERE id = %s AND user_id = %s
             """,
             (route_name.strip() if route_name else None, route_session_id, user_id),
         )
@@ -392,8 +355,9 @@ def update_route_name(user_id: int, route_session_id: int, route_name: str | Non
 
 def delete_route_session(user_id: int, route_session_id: int) -> bool:
     with _get_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM route_sessions WHERE id = ? AND user_id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "DELETE FROM route_sessions WHERE id = %s AND user_id = %s",
             (route_session_id, user_id),
         )
         return cur.rowcount > 0
@@ -411,28 +375,25 @@ def create_walk_session(
     steps: int,
 ) -> int:
     with _get_conn() as conn:
-        cur = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             INSERT INTO walk_sessions (
-                user_id,
-                route_session_id,
-                route_geojson,
-                started_at,
-                ended_at,
-                elapsed_seconds,
-                distance_km,
-                steps
+                user_id, route_session_id, route_geojson,
+                started_at, ended_at, elapsed_seconds, distance_km, steps
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (user_id, route_session_id, route_geojson, started_at, ended_at, elapsed_seconds, distance_km, steps),
         )
-        return int(cur.lastrowid)
+        return int(cur.fetchone()["id"])
 
 
 def list_walk_sessions_in_range(user_id: int, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
     with _get_conn() as conn:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 ws.id,
@@ -445,19 +406,21 @@ def list_walk_sessions_in_range(user_id: int, start_iso: str, end_iso: str) -> l
                 ws.steps
             FROM walk_sessions ws
             LEFT JOIN route_sessions rs ON rs.id = ws.route_session_id
-            WHERE ws.user_id = ?
-              AND datetime(ws.ended_at) >= datetime(?)
-              AND datetime(ws.ended_at) < datetime(?)
-            ORDER BY datetime(ws.ended_at) DESC, ws.id DESC
+            WHERE ws.user_id = %s
+              AND ws.ended_at >= %s::timestamptz
+              AND ws.ended_at < %s::timestamptz
+            ORDER BY ws.ended_at DESC, ws.id DESC
             """,
             (user_id, start_iso, end_iso),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
 def list_walk_sessions(user_id: int, limit: int = 200) -> list[dict[str, Any]]:
     with _get_conn() as conn:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 ws.id,
@@ -470,18 +433,20 @@ def list_walk_sessions(user_id: int, limit: int = 200) -> list[dict[str, Any]]:
                 ws.steps
             FROM walk_sessions ws
             LEFT JOIN route_sessions rs ON rs.id = ws.route_session_id
-            WHERE ws.user_id = ?
-            ORDER BY datetime(ws.ended_at) DESC, ws.id DESC
-            LIMIT ?
+            WHERE ws.user_id = %s
+            ORDER BY ws.ended_at DESC, ws.id DESC
+            LIMIT %s
             """,
             (user_id, limit),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
 def get_walk_session(user_id: int, walk_session_id: int) -> dict[str, Any] | None:
     with _get_conn() as conn:
-        row = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 ws.id,
@@ -495,17 +460,19 @@ def get_walk_session(user_id: int, walk_session_id: int) -> dict[str, Any] | Non
                 ws.steps
             FROM walk_sessions ws
             LEFT JOIN route_sessions rs ON rs.id = ws.route_session_id
-            WHERE ws.user_id = ? AND ws.id = ?
+            WHERE ws.user_id = %s AND ws.id = %s
             """,
             (user_id, walk_session_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     return dict(row) if row else None
 
 
 def delete_walk_session(user_id: int, walk_session_id: int) -> bool:
     with _get_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM walk_sessions WHERE user_id = ? AND id = ?",
+        cur = _cursor(conn)
+        cur.execute(
+            "DELETE FROM walk_sessions WHERE user_id = %s AND id = %s",
             (user_id, walk_session_id),
         )
         return cur.rowcount > 0
@@ -513,7 +480,8 @@ def delete_walk_session(user_id: int, walk_session_id: int) -> bool:
 
 def list_route_sessions_in_range(user_id: int, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
     with _get_conn() as conn:
-        rows = conn.execute(
+        cur = _cursor(conn)
+        cur.execute(
             """
             SELECT
                 id,
@@ -523,11 +491,12 @@ def list_route_sessions_in_range(user_id: int, start_iso: str, end_iso: str) -> 
                 steps,
                 created_at
             FROM route_sessions
-            WHERE user_id = ?
-              AND datetime(created_at) >= datetime(?)
-              AND datetime(created_at) < datetime(?)
-            ORDER BY datetime(created_at) ASC
+            WHERE user_id = %s
+              AND created_at >= %s::timestamptz
+              AND created_at < %s::timestamptz
+            ORDER BY created_at ASC
             """,
             (user_id, start_iso, end_iso),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
     return [dict(row) for row in rows]
