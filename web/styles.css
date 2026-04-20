@@ -18,6 +18,26 @@ body {
     linear-gradient(180deg, #f7fbff 0, #eef5ff 100%);
 }
 
+.gh-badge {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #24292e;
+  color: #fff;
+  font-size: .8rem;
+  font-weight: 500;
+  text-decoration: none;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  transition: background .15s;
+}
+.gh-badge:hover { background: #444d56; }
+
 .welcome-view {
   min-height: 100vh;
   display: grid;
